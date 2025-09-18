@@ -24,6 +24,7 @@ import FormRegistrationLogs from './pages/FormRegistrationLogs';
 import FormRegistrationLogsAgent70062 from './pages/FormRegistrationLogsAgent70062';
 import SuccessfulRegistrations from './pages/SuccessfulRegistrations';
 import Transactions from './pages/Transactions';
+import Pending from './pages/pending';
 
 const theme = createTheme({
   palette: {
@@ -480,6 +481,18 @@ function AppRoutes() {
               <ActivityHistory />
             </Layout>
           </AdminRoute>
+        }
+      />
+      
+      {/* Pending Registration Requests - accessible by any admin */}
+      <Route
+        path="/pending"
+        element={
+          <AdminOrSubAdminRoute>
+            <Layout>
+              <Pending />
+            </Layout>
+          </AdminOrSubAdminRoute>
         }
       />
       

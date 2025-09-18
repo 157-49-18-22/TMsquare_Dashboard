@@ -86,7 +86,7 @@ const AdminMenu = () => {
     {
       text: 'Form Registration Logs - Agent 70062',
       icon: <LogsIcon />,
-      path: '/form-registration-logs-agent-70062',
+      path: '/form-registration-logs-aget-70062',
       adminOnly: true
     },
     {
@@ -143,6 +143,12 @@ const AdminMenu = () => {
       text: 'User Management',
       icon: <PeopleIcon />,
       path: '/users',
+      adminOnly: false
+    },
+    {
+      text: 'Registration Pending Requests',
+      icon: <PeopleIcon />,
+      path: '/pending',
       adminOnly: false
     }
   ];
