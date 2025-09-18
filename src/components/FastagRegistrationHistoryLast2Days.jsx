@@ -38,7 +38,7 @@ import {
   Info as InfoIcon,
   FileDownload as DownloadIcon
 } from '@mui/icons-material';
-import { getFirestore, collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, and } from 'firebase/firestore';
 import { exportToExcel, formatDataForExport } from '../utils/excelExport';
 
 const FastagRegistrationHistoryLast2Days = () => {
@@ -122,17 +122,43 @@ const FastagRegistrationHistoryLast2Days = () => {
     try {
       setLoading(true);
       
-      // Use client-side filtering for flexibility
+      // Calculate 2 days ago timestamp for Firestore query
+      const now = new Date();
+      const twoDaysAgo = new Date(now.getTime() - (2 * 24 * 60 * 60 * 1000));
+      
+      // Use Firestore query to filter by date first (server-side filtering)
       let registrationsQuery = collection(db, 'fastagRegistrations');
-      let constraints = [orderBy('updatedAt', 'desc')];
+      let constraints = [
+        where('updatedAt', '>=', twoDaysAgo), // Server-side date filter
+        orderBy('updatedAt', 'desc'),
+        limit(5000) // Limit to 1000 most recent records to prevent timeout
+      ];
       
-      // Firestore doesn't allow complex filtering with multiple fields, so we'll fetch all and filter on client side
+      // Add additional server-side filters if possible
+      // Note: Firestore has limitations on compound queries, so we'll be selective
+      if (filters.stage) {
+        constraints.unshift(where('currentStage', '==', filters.stage));
+      }
+      
+      // For mobileNo and vehicleNo, we'll use range queries if they're provided
+      // but only if stage filter is not used (to avoid compound query limitations)
+      if (filters.mobileNo && !filters.stage) {
+        constraints.unshift(where('mobileNo', '>=', filters.mobileNo));
+        constraints.unshift(where('mobileNo', '<=', filters.mobileNo + '\uf8ff'));
+      }
+      
+      if (filters.vehicleNo && !filters.stage && !filters.mobileNo) {
+        constraints.unshift(where('vehicleNo', '>=', filters.vehicleNo.toLowerCase()));
+        constraints.unshift(where('vehicleNo', '<=', filters.vehicleNo.toLowerCase() + '\uf8ff'));
+      }
+      
+      // Execute query with server-side filtering
       registrationsQuery = query(registrationsQuery, ...constraints);
-      
-      // Execute query
       const snapshot = await getDocs(registrationsQuery);
-      const allRegistrations = [];
       
+      console.log(`Fetched ${snapshot.size} registrations from last 2 days (server-side filtered)`);
+      
+      const allRegistrations = [];
       snapshot.forEach(doc => {
         allRegistrations.push({
           id: doc.id,
@@ -143,32 +169,21 @@ const FastagRegistrationHistoryLast2Days = () => {
         });
       });
       
-      // Now apply filters on the client side
+      // Apply remaining client-side filters (for complex filters that can't be done server-side)
       let filteredResults = [...allRegistrations];
       
-      // Apply LAST 2 DAYS filter - this is the main difference from the original
-      const now = new Date();
-      const twoDaysAgo = new Date(now.getTime() - (2 * 24 * 60 * 60 * 1000)); // 2 days ago
-      filteredResults = filteredResults.filter(reg => reg.updatedAt >= twoDaysAgo);
-      
-      // Apply mobileNo filter
-      if (filters.mobileNo) {
+      // Apply client-side filters for cases not handled server-side
+      if (filters.mobileNo && filters.stage) {
+        // If stage filter was used server-side, apply mobileNo filter client-side
         filteredResults = filteredResults.filter(reg => 
           reg.mobileNo && reg.mobileNo.includes(filters.mobileNo)
         );
       }
       
-      // Apply vehicleNo filter
-      if (filters.vehicleNo) {
+      if (filters.vehicleNo && (filters.stage || filters.mobileNo)) {
+        // If other filters were used server-side, apply vehicleNo filter client-side
         filteredResults = filteredResults.filter(reg => 
           reg.vehicleNo && reg.vehicleNo.toLowerCase().includes(filters.vehicleNo.toLowerCase())
-        );
-      }
-      
-      // Apply stage filter
-      if (filters.stage) {
-        filteredResults = filteredResults.filter(reg => 
-          reg.currentStage === filters.stage
         );
       }
       
@@ -194,14 +209,11 @@ const FastagRegistrationHistoryLast2Days = () => {
       // Update total count
       setTotalRegistrations(filteredResults.length);
       
-      // Apply pagination (client-side)
-      const paginatedResults = reset ? 
-        filteredResults.slice(0, rowsPerPage) : 
-        filteredResults.slice(0, (page + 1) * rowsPerPage);
-      
-      // Update registrations state
-      setRegistrations(paginatedResults);
-      setPage(reset ? 0 : page);
+      // Store all filtered results for pagination
+      setRegistrations(filteredResults);
+      if (reset) {
+        setPage(0);
+      }
     } catch (error) {
       console.error('Error fetching FasTag registrations:', error);
     } finally {
@@ -210,17 +222,14 @@ const FastagRegistrationHistoryLast2Days = () => {
   };
 
   const handleChangePage = (event, newPage) => {
-    if (newPage > page) {
-      // Fetch more data when going to next page
-      fetchRegistrations(false);
-    }
     setPage(newPage);
+    // No need to fetch more data since we already have all filtered results
   };
 
   const handleChangeRowsPerPage = (event) => {
     setRowsPerPage(parseInt(event.target.value, 10));
     setPage(0);
-    fetchRegistrations(true);
+    // No need to re-fetch data, just change pagination
   };
 
   const handleFilterChange = (event) => {
@@ -250,6 +259,7 @@ const FastagRegistrationHistoryLast2Days = () => {
 
   const applyFilters = () => {
     setPage(0);
+    // Re-fetch with new filters (server-side filtering will be applied)
     fetchRegistrations(true);
   };
 
@@ -262,8 +272,8 @@ const FastagRegistrationHistoryLast2Days = () => {
       bcId: ''
     });
     setSelectedUser(null);
-    // Re-fetch with reset filters
-    setTimeout(() => fetchRegistrations(true), 0);
+    // Re-fetch with reset filters (will use server-side filtering)
+    fetchRegistrations(true);
   };
 
   const handleRegistrationClick = (registration) => {
@@ -493,7 +503,7 @@ const FastagRegistrationHistoryLast2Days = () => {
       <Paper>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
           <Typography variant="h6">
-            Registration Records (Last 2 Days)
+            Registration Records (Last 2 Days) - Limited to 1000 most recent
           </Typography>
           <Button
             startIcon={<RefreshIcon />}
@@ -531,7 +541,7 @@ const FastagRegistrationHistoryLast2Days = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  registrations.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(registration => {
+                  registrations.slice(page * rowsPerPage, (page + 1) * rowsPerPage).map(registration => {
                     // Find BC_ID from user data
                     let bcId = 'N/A';
                     if (registration.user && registration.user.uid) {
@@ -568,13 +578,6 @@ const FastagRegistrationHistoryLast2Days = () => {
                       </TableRow>
                     );
                   })
-                )}
-                {loading && page > 0 && (
-                  <TableRow>
-                    <TableCell colSpan={8} align="center">
-                      <CircularProgress size={24} />
-                    </TableCell>
-                  </TableRow>
                 )}
               </TableBody>
             </Table>

@@ -37,18 +37,18 @@ const AdminMenu = () => {
       path: '/dashboard',
       adminOnly: false
     },
-    {
-      text: 'Users List',
-      icon: <PeopleIcon />,
-      path: '/users-list',
-      adminOnly: false
-    },
-    {
-      text: 'Wallet Top-ups',
-      icon: <WalletIcon />,
-      path: '/wallet-topups',
-      adminOnly: true
-    },
+    // {
+    //   text: 'Users List',
+    //   icon: <PeopleIcon />,
+    //   path: '/users-list',
+    //   adminOnly: false
+    // },
+    // {
+    //   text: 'Wallet Top-ups',
+    //   icon: <WalletIcon />,
+    //   path: '/wallet-topups',
+    //   adminOnly: true
+    // },
     {
       text: 'Wallet Access Manager',
       icon: <KeyIcon />,
@@ -64,35 +64,29 @@ const AdminMenu = () => {
     },
     
     // COMMENTED OUT: FasTag Registration History to reduce document reads
-    {
-      text: 'FasTag Registration History',
-      icon: <RegistrationHistoryIcon />,
-      path: '/fastag-registration-history',
-      adminOnly: true
-        },
-    {
-      text: 'FasTag Registration History - Last 2 Days',
-      icon: <RegistrationHistoryIcon />,
-      path: '/fastag-registration-history-last-2-days',
-      adminOnly: true
-    },
+    // {
+    //   text: 'FasTag Registration History',
+    //   icon: <RegistrationHistoryIcon />,
+    //   path: '/fastag-registration-history',
+    //   adminOnly: true
+    //     },
     // COMMENTED OUT: Form Registration Logs to reduce Firebase document reads
     {
-      text: 'Form Registration Logs',
+      text: 'Successful Registrations',
       icon: <LogsIcon />,
       path: '/form-registration-logs',
       adminOnly: true
     },
     {
-      text: 'Form Registration Logs - Agent 70062',
+      text: 'Successful Registrations - RSA',
       icon: <LogsIcon />,
       path: '/form-registration-logs-aget-70062',
       adminOnly: true
     },
     {
-      text: 'Successful Registrations',
-      icon: <LogsIcon />,
-      path: '/successful-registrations',
+      text: 'FasTag Registration LOGS - Last 2 Days',
+      icon: <RegistrationHistoryIcon />,
+      path: '/fastag-registration-history-last-2-days',
       adminOnly: true
     },
     // COMMENTED OUT: Assignment Logs to reduce document reads
@@ -121,12 +115,12 @@ const AdminMenu = () => {
       path: '/settings',
       adminOnly: false
     },
-    {
-      text: 'Wallet Topup History',
-      icon: <HistoryIcon />,
-      path: '/wallet-topup-history',
-      adminOnly: true
-    },
+    // {
+    //   text: 'Wallet Topup History',
+    //   icon: <HistoryIcon />,
+    //   path: '/wallet-topup-history',
+    //   adminOnly: true
+    // },
     {
       text: 'FastTag Data',
       icon: <FastagIcon />,

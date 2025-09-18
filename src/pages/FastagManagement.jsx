@@ -613,50 +613,37 @@ const FastagManagement = () => {
       
       for (const serialNumber of serialNumbers) {
         try {
-          // Check if serial number exists in allocatedFasTags
+          // Check if serial number exists in allocatedFasTags (get ALL documents)
           const allocatedRef = collection(db, "allocatedFasTags");
           const allocatedQuery = query(allocatedRef, where("serialNumber", "==", serialNumber));
           const allocatedSnapshot = await getDocs(allocatedQuery);
           
           if (!allocatedSnapshot.empty) {
-            const allocation = allocatedSnapshot.docs[0];
-            previewData.push({
-              serialNumber,
-              exists: true,
-              documentId: allocation.id,
-              status: allocation.data().status,
-              bcId: allocation.data().bcId,
-              userName: allocation.data().userName,
-              allocatedAt: allocation.data().allocatedAt
-            });
-          } else {
-            // Check if it exists in transactions collection
-            const transactionsRef = collection(db, "transactions");
-            const transactionsQuery = query(transactionsRef, where("details.serialNo", "==", serialNumber));
-            const transactionsSnapshot = await getDocs(transactionsQuery);
-            
-            if (!transactionsSnapshot.empty) {
-              const transaction = transactionsSnapshot.docs[0];
+            // Add all documents with this serial number
+            allocatedSnapshot.docs.forEach(doc => {
               previewData.push({
                 serialNumber,
                 exists: true,
-                documentId: transaction.id,
-                status: 'in_transaction',
-                bcId: 'N/A',
-                userName: 'N/A',
-                allocatedAt: transaction.data().timestamp
+                documentId: doc.id,
+                collection: 'allocatedFasTags',
+                status: doc.data().status,
+                bcId: doc.data().bcId,
+                userName: doc.data().userName,
+                allocatedAt: doc.data().allocatedAt
               });
-            } else {
-              previewData.push({
-                serialNumber,
-                exists: false,
-                documentId: null,
-                status: 'not_found',
-                bcId: 'N/A',
-                userName: 'N/A',
-                allocatedAt: null
-              });
-            }
+            });
+          } else {
+            // If no documents found in allocatedFasTags, add a not found entry
+            previewData.push({
+              serialNumber,
+              exists: false,
+              documentId: null,
+              collection: 'none',
+              status: 'not_found',
+              bcId: 'N/A',
+              userName: 'N/A',
+              allocatedAt: null
+            });
           }
         } catch (error) {
           console.error(`Error checking serial number ${serialNumber}:`, error);
@@ -692,20 +679,14 @@ const FastagManagement = () => {
       let errorCount = 0;
       
       for (const item of deletionPreview) {
-        if (item.exists && item.documentId) {
+        if (item.exists && item.documentId && item.collection === 'allocatedFasTags') {
           try {
-            if (item.status === 'in_transaction') {
-              // Delete from transactions collection
-              const transactionRef = doc(db, "transactions", item.documentId);
-              batch.delete(transactionRef);
-            } else {
-              // Delete from allocatedFasTags collection
-              const allocationRef = doc(db, "allocatedFasTags", item.documentId);
-              batch.delete(allocationRef);
-            }
+            // Delete from allocatedFasTags collection
+            const allocationRef = doc(db, "allocatedFasTags", item.documentId);
+            batch.delete(allocationRef);
             successCount++;
           } catch (error) {
-            console.error(`Error deleting ${item.serialNumber}:`, error);
+            console.error(`Error deleting ${item.serialNumber} (${item.documentId}):`, error);
             errorCount++;
           }
         }
@@ -1081,7 +1062,8 @@ const FastagManagement = () => {
             </Alert>
             
             <Typography variant="subtitle1" gutterBottom>
-              Serial Numbers to Delete: {deletionPreview.length}
+              Allocated FasTag Records to Delete: {deletionPreview.filter(item => item.exists).length} 
+              ({[...new Set(deletionPreview.map(item => item.serialNumber))].length} unique serial numbers)
             </Typography>
             
             <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
@@ -1098,12 +1080,14 @@ const FastagManagement = () => {
                 </TableHead>
                 <TableBody>
                   {deletionPreview.map((item, index) => (
-                    <TableRow key={index}>
+                    <TableRow key={`${item.serialNumber}-${item.documentId}-${index}`}>
                       <TableCell>{item.serialNumber}</TableCell>
                       <TableCell>
                         <Chip 
-                          label={item.status === 'in_transaction' ? 'In Transaction' : item.status} 
-                          color={item.exists ? 'error' : 'default'}
+                          label={item.status} 
+                          color={item.status === 'available' ? 'success' : 
+                                 item.status === 'used' ? 'warning' : 
+                                 item.status === 'revoked' ? 'error' : 'default'}
                           size="small"
                         />
                       </TableCell>
@@ -1138,8 +1122,8 @@ const FastagManagement = () => {
             
             <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                <strong>Summary:</strong> {deletionPreview.filter(item => item.exists).length} records will be deleted, 
-                {deletionPreview.filter(item => !item.exists).length} serial numbers were not found.
+                <strong>Summary:</strong> {deletionPreview.filter(item => item.exists).length} allocated FasTag records will be deleted, 
+                {deletionPreview.filter(item => !item.exists).length} serial numbers were not found in allocatedFasTags collection.
               </Typography>
             </Box>
           </Box>
