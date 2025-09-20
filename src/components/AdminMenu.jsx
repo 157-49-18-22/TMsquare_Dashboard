@@ -80,7 +80,7 @@ const AdminMenu = () => {
     {
       text: 'Successful Registrations - RSA',
       icon: <LogsIcon />,
-      path: '/form-registration-logs-aget-70062',
+      path: '/form-registration-logs-agent-70062',
       adminOnly: true
     },
     {
