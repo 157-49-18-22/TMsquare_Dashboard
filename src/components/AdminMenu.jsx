@@ -21,7 +21,8 @@ import {
   ListAlt as RegistrationHistoryIcon,
   AccountBalanceWallet as WalletIcon,
   VpnKey as KeyIcon,
-  FormatListBulleted as LogsIcon
+  FormatListBulleted as LogsIcon,
+  Add as AddIcon
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -81,6 +82,12 @@ const AdminMenu = () => {
       text: 'Successful Registrations - RSA',
       icon: <LogsIcon />,
       path: '/form-registration-logs-agent-70062',
+      adminOnly: true
+    },
+    {
+      text: 'Add Manual Logs',
+      icon: <AddIcon />,
+      path: '/new-logs',
       adminOnly: true
     },
     {
