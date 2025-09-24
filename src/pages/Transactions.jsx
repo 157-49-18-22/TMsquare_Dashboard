@@ -708,7 +708,7 @@ function Transactions() {
     { 
       field: 'userId', 
       headerName: 'User ID', 
-      width: 200,
+      width: 200,   
       renderCell: (params) => (
         <Tooltip title={params?.value || ''}>
           <span style={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>

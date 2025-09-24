@@ -126,34 +126,25 @@ const FastagRegistrationHistoryLast2Days = () => {
       const now = new Date();
       const twoDaysAgo = new Date(now.getTime() - (2 * 24 * 60 * 60 * 1000));
       
-      // Use Firestore query to filter by date first (server-side filtering)
-      let registrationsQuery = collection(db, 'fastagRegistrations');
+      // Build query constraints in correct order
       let constraints = [
         where('updatedAt', '>=', twoDaysAgo), // Server-side date filter
         orderBy('updatedAt', 'desc'),
-        limit(5000) // Limit to 1000 most recent records to prevent timeout
+        limit(5000) // Limit to 5000 most recent records to prevent timeout
       ];
       
-      // Add additional server-side filters if possible
-      // Note: Firestore has limitations on compound queries, so we'll be selective
+      // Add stage filter if provided (this is the only server-side filter we can reliably use)
       if (filters.stage) {
-        constraints.unshift(where('currentStage', '==', filters.stage));
-      }
-      
-      // For mobileNo and vehicleNo, we'll use range queries if they're provided
-      // but only if stage filter is not used (to avoid compound query limitations)
-      if (filters.mobileNo && !filters.stage) {
-        constraints.unshift(where('mobileNo', '>=', filters.mobileNo));
-        constraints.unshift(where('mobileNo', '<=', filters.mobileNo + '\uf8ff'));
-      }
-      
-      if (filters.vehicleNo && !filters.stage && !filters.mobileNo) {
-        constraints.unshift(where('vehicleNo', '>=', filters.vehicleNo.toLowerCase()));
-        constraints.unshift(where('vehicleNo', '<=', filters.vehicleNo.toLowerCase() + '\uf8ff'));
+        constraints = [
+          where('currentStage', '==', filters.stage),
+          where('updatedAt', '>=', twoDaysAgo),
+          orderBy('updatedAt', 'desc'),
+          limit(5000)
+        ];
       }
       
       // Execute query with server-side filtering
-      registrationsQuery = query(registrationsQuery, ...constraints);
+      const registrationsQuery = query(collection(db, 'fastagRegistrations'), ...constraints);
       const snapshot = await getDocs(registrationsQuery);
       
       console.log(`Fetched ${snapshot.size} registrations from last 2 days (server-side filtered)`);
@@ -169,32 +160,31 @@ const FastagRegistrationHistoryLast2Days = () => {
         });
       });
       
-      // Apply remaining client-side filters (for complex filters that can't be done server-side)
+      // Apply all client-side filters for better search functionality
       let filteredResults = [...allRegistrations];
       
-      // Apply client-side filters for cases not handled server-side
-      if (filters.mobileNo && filters.stage) {
-        // If stage filter was used server-side, apply mobileNo filter client-side
+      // Apply mobile number filter (client-side)
+      if (filters.mobileNo) {
         filteredResults = filteredResults.filter(reg => 
           reg.mobileNo && reg.mobileNo.includes(filters.mobileNo)
         );
       }
       
-      if (filters.vehicleNo && (filters.stage || filters.mobileNo)) {
-        // If other filters were used server-side, apply vehicleNo filter client-side
+      // Apply vehicle number filter (client-side)
+      if (filters.vehicleNo) {
         filteredResults = filteredResults.filter(reg => 
           reg.vehicleNo && reg.vehicleNo.toLowerCase().includes(filters.vehicleNo.toLowerCase())
         );
       }
       
-      // Apply userId filter
+      // Apply userId filter (client-side)
       if (filters.userId) {
         filteredResults = filteredResults.filter(reg => 
           (reg.user && reg.user.uid === filters.userId)
         );
       }
       
-      // Apply BC_ID filter
+      // Apply BC_ID filter (client-side)
       if (filters.bcId) {
         // Find users with this BC_ID
         const usersWithBcId = users.filter(user => user.bcId === filters.bcId);
@@ -214,6 +204,9 @@ const FastagRegistrationHistoryLast2Days = () => {
       if (reset) {
         setPage(0);
       }
+      
+      console.log(`After client-side filtering: ${filteredResults.length} registrations`);
+      
     } catch (error) {
       console.error('Error fetching FasTag registrations:', error);
     } finally {
@@ -246,6 +239,11 @@ const FastagRegistrationHistoryLast2Days = () => {
       ...filters,
       bcId: newValue || ''
     });
+    
+    // Trigger search when BC_ID is selected
+    setTimeout(() => {
+      fetchRegistrations(true);
+    }, 100);
   };
 
   // Handle user selection from dropdown
@@ -255,12 +253,32 @@ const FastagRegistrationHistoryLast2Days = () => {
       ...filters,
       userId: newValue ? newValue.id : ''
     });
+    
+    // Trigger search when user is selected
+    setTimeout(() => {
+      fetchRegistrations(true);
+    }, 100);
   };
 
   const applyFilters = () => {
     setPage(0);
     // Re-fetch with new filters (server-side filtering will be applied)
     fetchRegistrations(true);
+  };
+
+  // Add real-time search functionality
+  const handleSearchChange = (field, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [field]: value
+    }));
+    
+    // Debounce the search to avoid too many API calls
+    setTimeout(() => {
+      if (value.length >= 2 || value.length === 0) {
+        fetchRegistrations(true);
+      }
+    }, 500);
   };
 
   const resetFilters = () => {
@@ -398,7 +416,17 @@ const FastagRegistrationHistoryLast2Days = () => {
       
       {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>Filters</Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6">Filters</Typography>
+          {loading && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={20} />
+              <Typography variant="body2" color="text.secondary">
+                Searching...
+              </Typography>
+            </Box>
+          )}
+        </Box>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} md={1.5}>
             <TextField
@@ -407,7 +435,8 @@ const FastagRegistrationHistoryLast2Days = () => {
               label="Mobile Number"
               name="mobileNo"
               value={filters.mobileNo}
-              onChange={handleFilterChange}
+              onChange={(e) => handleSearchChange('mobileNo', e.target.value)}
+              placeholder="Search by mobile number"
             />
           </Grid>
           
@@ -418,7 +447,8 @@ const FastagRegistrationHistoryLast2Days = () => {
               label="Vehicle Number"
               name="vehicleNo"
               value={filters.vehicleNo}
-              onChange={handleFilterChange}
+              onChange={(e) => handleSearchChange('vehicleNo', e.target.value)}
+              placeholder="Search by vehicle number"
             />
           </Grid>
           
@@ -503,14 +533,14 @@ const FastagRegistrationHistoryLast2Days = () => {
       <Paper>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
           <Typography variant="h6">
-            Registration Records (Last 2 Days) - Limited to 1000 most recent
+            Registration Records (Last 2 Days) - {totalRegistrations} records found
           </Typography>
           <Button
             startIcon={<RefreshIcon />}
             onClick={() => fetchRegistrations(true)}
             disabled={loading}
           >
-            Refresh
+            {loading ? 'Refreshing...' : 'Refresh'}
           </Button>
         </Box>
         

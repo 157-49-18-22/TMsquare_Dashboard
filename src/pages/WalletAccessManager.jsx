@@ -125,7 +125,8 @@ function WalletAccessManager() {
   
   const verifyAdminPassword = () => {
     // Check if the password is correct (123456)
-    if (adminPasswordInput === '123456') {
+    if (adminPasswordInput === '654321') {
+    
       setAccessAuthorized(true);
       setAdminPasswordDialogOpen(false);
       showSnackbar('Access granted', 'success');
