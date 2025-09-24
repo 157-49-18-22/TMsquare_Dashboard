@@ -22,6 +22,7 @@ import WalletTopupHistory from './pages/WalletTopupHistory';
 import WalletAccessManager from './pages/WalletAccessManager';
 import FormRegistrationLogs from './pages/FormRegistrationLogs';
 import FormRegistrationLogsAgent70062 from './pages/FormRegistrationLogsAgent70062';
+import NewLogs from './pages/newlogs';
 import SuccessfulRegistrations from './pages/SuccessfulRegistrations';
 import Transactions from './pages/Transactions';
 import Pending from './pages/pending';
@@ -301,6 +302,18 @@ function AppRoutes() {
           <AdminRoute>
             <Layout>
               <FormRegistrationLogsAgent70062 />
+            </Layout>
+          </AdminRoute>
+        }
+      />
+      
+      {/* New Manual Logs - Super Admin Only */}
+      <Route
+        path="/new-logs"
+        element={
+          <AdminRoute>
+            <Layout>
+              <NewLogs />
             </Layout>
           </AdminRoute>
         }
