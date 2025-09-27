@@ -17,17 +17,26 @@ import {
   Divider,
   Card,
   CardContent,
-  CardActions
+  CardActions,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Tooltip,
+  IconButton,
+  Chip
 } from '@mui/material';
 import { 
   Save as SaveIcon,
   Add as AddIcon,
   Refresh as RefreshIcon,
-  CheckCircle as CheckCircleIcon
+  CheckCircle as CheckCircleIcon,
+  Key as KeyIcon
 } from '@mui/icons-material';
-import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, Timestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { doc, getDoc } from 'firebase/firestore';
+import { verifyWalletAccessPassword } from '../api/firestoreApi';
 
 function NewLogs() {
   const [loading, setLoading] = useState(false);
@@ -42,18 +51,29 @@ function NewLogs() {
   // Form state
   const [formData, setFormData] = useState({
     vehicleNo: '',
-    mobileNo: '',
     serialNo: '',
     agentId: '70062', // Default to RSA
     apiSuccess: true,
     error: null,
     status: 'success',
     customTimestamp: '',
-    useCustomTimestamp: false
+    useCustomTimestamp: false,
+    // Transaction fields
+    createTransaction: false,
+    transactionAmount: '',
+    transactionType: 'debit',
+    transactionPurpose: 'FasTag Registration',
+    previousBalance: '',
+    newBalance: ''
   });
 
   // Validation state
   const [errors, setErrors] = useState({});
+
+  // Wallet access state
+  const [walletAccessDialogOpen, setWalletAccessDialogOpen] = useState(false);
+  const [walletAccessPassword, setWalletAccessPassword] = useState('');
+  const [walletAccessGranted, setWalletAccessGranted] = useState(false);
 
   useEffect(() => {
     fetchUsers();
@@ -73,7 +93,9 @@ function NewLogs() {
           displayName: userData.displayName || userData.email || 'Unknown User',
           email: userData.email,
           bcId: userData.bcId || '',
-          minFasTagBalance: userData.minFasTagBalance || '400'
+          minFasTagBalance: userData.minFasTagBalance || '400',
+          minRSABalance: userData.minRSABalance || '400',
+          wallet: userData.wallet || 0
         });
       });
       
@@ -89,12 +111,6 @@ function NewLogs() {
 
     if (!formData.vehicleNo.trim()) {
       newErrors.vehicleNo = 'Vehicle number is required';
-    }
-
-    if (!formData.mobileNo.trim()) {
-      newErrors.mobileNo = 'Mobile number is required';
-    } else if (!/^\d{10}$/.test(formData.mobileNo.replace(/\D/g, ''))) {
-      newErrors.mobileNo = 'Please enter a valid 10-digit mobile number';
     }
 
     if (!formData.serialNo.trim()) {
@@ -114,6 +130,19 @@ function NewLogs() {
       const now = new Date();
       if (selectedDate > now) {
         newErrors.customTimestamp = 'Date cannot be in the future';
+      }
+    }
+
+    // Transaction validation
+    if (formData.createTransaction) {
+      if (!formData.transactionAmount || formData.transactionAmount <= 0) {
+        newErrors.transactionAmount = 'Transaction amount is required and must be greater than 0';
+      }
+      if (!formData.previousBalance || formData.previousBalance < 0) {
+        newErrors.previousBalance = 'Previous balance is required and cannot be negative';
+      }
+      if (!formData.newBalance || formData.newBalance < 0) {
+        newErrors.newBalance = 'New balance is required and cannot be negative';
       }
     }
 
@@ -146,6 +175,90 @@ function NewLogs() {
         customTimestamp: localDateTime
       }));
     }
+
+    // Auto-calculate new balance for transactions
+    if (field === 'transactionAmount' || field === 'previousBalance') {
+      const amount = field === 'transactionAmount' ? parseFloat(value) || 0 : parseFloat(formData.transactionAmount) || 0;
+      const prevBalance = field === 'previousBalance' ? parseFloat(value) || 0 : parseFloat(formData.previousBalance) || 0;
+      const transactionType = formData.transactionType;
+      
+      if (amount > 0 && prevBalance >= 0) {
+        let newBalance;
+        if (transactionType === 'debit') {
+          newBalance = prevBalance - amount;
+        } else if (transactionType === 'credit' || transactionType === 'recharge') {
+          newBalance = prevBalance + amount;
+        } else {
+          newBalance = prevBalance;
+        }
+        
+        setFormData(prev => ({
+          ...prev,
+          newBalance: newBalance.toFixed(2)
+        }));
+      }
+    }
+
+    // Auto-calculate new balance when transaction type changes
+    if (field === 'transactionType') {
+      const amount = parseFloat(formData.transactionAmount) || 0;
+      const prevBalance = parseFloat(formData.previousBalance) || 0;
+      
+      if (amount > 0 && prevBalance >= 0) {
+        let newBalance;
+        if (value === 'debit') {
+          newBalance = prevBalance - amount;
+        } else if (value === 'credit' || value === 'recharge') {
+          newBalance = prevBalance + amount;
+        } else {
+          newBalance = prevBalance;
+        }
+        
+        setFormData(prev => ({
+          ...prev,
+          newBalance: newBalance.toFixed(2)
+        }));
+      }
+    }
+
+    // Auto-populate transaction amount based on agent type
+    if (field === 'agentId' && selectedUser) {
+      let minBalance;
+      if (value === '70062') { // RSA
+        minBalance = selectedUser.minRSABalance || '400';
+      } else if (value === '70043') { // Non-RSA
+        minBalance = selectedUser.minFasTagBalance || '400';
+      } else {
+        minBalance = '400'; // Default for Manual Entry
+      }
+      
+      setFormData(prev => {
+        const updatedFormData = {
+          ...prev,
+          transactionAmount: minBalance
+        };
+
+        // Recalculate new balance if previous balance is set
+        const amount = parseFloat(minBalance) || 0;
+        const prevBalance = parseFloat(prev.previousBalance) || 0;
+        const transactionType = prev.transactionType;
+        
+        if (amount > 0 && prevBalance >= 0) {
+          let newBalance;
+          if (transactionType === 'debit') {
+            newBalance = prevBalance - amount;
+          } else if (transactionType === 'credit' || transactionType === 'recharge') {
+            newBalance = prevBalance + amount;
+          } else {
+            newBalance = prevBalance;
+          }
+          
+          updatedFormData.newBalance = newBalance.toFixed(2);
+        }
+
+        return updatedFormData;
+      });
+    }
   };
 
   const handleUserChange = (event, newValue) => {
@@ -158,6 +271,48 @@ function NewLogs() {
         user: ''
       }));
     }
+
+    // Auto-populate previous balance from user's wallet
+    if (newValue && newValue.wallet !== undefined) {
+      setFormData(prev => {
+        const updatedFormData = {
+          ...prev,
+          previousBalance: newValue.wallet.toString()
+        };
+
+        // Auto-populate transaction amount based on agent type
+        let minBalance;
+        if (prev.agentId === '70062') { // RSA
+          minBalance = newValue.minRSABalance || '400';
+        } else if (prev.agentId === '70043') { // Non-RSA
+          minBalance = newValue.minFasTagBalance || '400';
+        } else {
+          minBalance = '400'; // Default for Manual Entry
+        }
+        
+        updatedFormData.transactionAmount = minBalance;
+
+        // Recalculate new balance
+        const amount = parseFloat(minBalance) || 0;
+        const prevBalance = parseFloat(newValue.wallet) || 0;
+        const transactionType = prev.transactionType;
+        
+        if (amount > 0 && prevBalance >= 0) {
+          let newBalance;
+          if (transactionType === 'debit') {
+            newBalance = prevBalance - amount;
+          } else if (transactionType === 'credit' || transactionType === 'recharge') {
+            newBalance = prevBalance + amount;
+          } else {
+            newBalance = prevBalance;
+          }
+          
+          updatedFormData.newBalance = newBalance.toFixed(2);
+        }
+
+        return updatedFormData;
+      });
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -165,6 +320,13 @@ function NewLogs() {
     
     if (!validateForm()) {
       showSnackbar('Please fix the errors before submitting', 'error');
+      return;
+    }
+
+    // Check wallet access if creating transaction
+    if (formData.createTransaction && !walletAccessGranted) {
+      showSnackbar('Wallet access required to create transactions. Please unlock wallet access first.', 'warning');
+      handleWalletAccessRequest();
       return;
     }
 
@@ -198,7 +360,6 @@ function NewLogs() {
         status: formData.status,
         formData: {
           vehicleNo: formData.vehicleNo.trim(),
-          mobileNo: formData.mobileNo.trim(),
           serialNo: formData.serialNo.trim(),
           agentId: formData.agentId,
           apiSuccess: formData.apiSuccess,
@@ -210,9 +371,6 @@ function NewLogs() {
             },
             fasTagDetails: {
               serialNo: formData.serialNo.trim()
-            },
-            custDetails: {
-              mobileNo: formData.mobileNo.trim()
             },
             regDetails: {
               agentId: formData.agentId
@@ -239,23 +397,77 @@ function NewLogs() {
         'Server timestamp');
       console.log('Log data timestamp type:', typeof logTimestamp);
       console.log('Log data timestamp value:', logTimestamp);
+
+      // Create transaction log if requested
+      if (formData.createTransaction) {
+        const transactionData = {
+          transactionId: `MANUAL_${docRef.id}`,
+          amount: parseFloat(formData.transactionAmount),
+          type: formData.transactionType,
+          status: formData.status === 'success' ? 'completed' : 'pending',
+          purpose: formData.transactionPurpose,
+          details: {
+            name: selectedUser.displayName,
+            vehicleNo: formData.vehicleNo.trim(),
+            serialNo: formData.serialNo.trim(),
+            previousBalance: parseFloat(formData.previousBalance),
+            newBalance: parseFloat(formData.newBalance)
+          },
+          userId: selectedUser.id,
+          paymentGateway: 'Manual Entry',
+          method: 'Manual Entry',
+          currency: 'INR',
+          timestamp: logTimestamp,
+          createdAt: logTimestamp,
+          // Mark as manually created
+          isManualEntry: true,
+          createdBy: 'admin',
+          // Link to the form log
+          formLogId: docRef.id
+        };
+
+        const transactionRef = await addDoc(collection(db, 'transactions'), transactionData);
+        console.log('Transaction log created with ID:', transactionRef.id);
+
+        // Update user's wallet with the new balance
+        try {
+          const userRef = doc(db, 'users', selectedUser.id);
+          await updateDoc(userRef, {
+            wallet: parseFloat(formData.newBalance)
+          });
+          console.log('User wallet updated to:', formData.newBalance);
+        } catch (walletError) {
+          console.error('Error updating user wallet:', walletError);
+          // Don't fail the entire operation if wallet update fails
+          showSnackbar('Transaction created but failed to update user wallet', 'warning');
+        }
+      }
       
       // Reset form
       setFormData({
         vehicleNo: '',
-        mobileNo: '',
         serialNo: '',
         agentId: '70062', // Default to RSA
         apiSuccess: true,
         error: null,
         status: 'success',
         customTimestamp: '',
-        useCustomTimestamp: false
+        useCustomTimestamp: false,
+        // Transaction fields
+        createTransaction: false,
+        transactionAmount: '',
+        transactionType: 'debit',
+        transactionPurpose: 'FasTag Registration',
+        previousBalance: '',
+        newBalance: ''
       });
       setSelectedUser(null);
       setErrors({});
       
-      showSnackbar('Manual log created successfully! It will appear in Form Registration Logs.', 'success');
+      const successMessage = formData.createTransaction 
+        ? 'Manual log and transaction created successfully! User wallet updated. They will appear in Form Registration Logs and Transactions.'
+        : 'Manual log created successfully! It will appear in Form Registration Logs.';
+      showSnackbar(successMessage, 'success');
       
     } catch (error) {
       console.error('Error creating manual log:', error);
@@ -268,14 +480,20 @@ function NewLogs() {
   const handleReset = () => {
     setFormData({
       vehicleNo: '',
-      mobileNo: '',
       serialNo: '',
       agentId: '70062', // Default to RSA
       apiSuccess: true,
       error: null,
       status: 'success',
       customTimestamp: '',
-      useCustomTimestamp: false
+      useCustomTimestamp: false,
+      // Transaction fields
+      createTransaction: false,
+      transactionAmount: '',
+      transactionType: 'debit',
+      transactionPurpose: 'FasTag Registration',
+      previousBalance: '',
+      newBalance: ''
     });
     setSelectedUser(null);
     setErrors({});
@@ -289,6 +507,39 @@ function NewLogs() {
     setSnackbar({ ...snackbar, open: false });
   };
 
+  // Wallet access functions
+  const handleWalletAccessRequest = () => {
+    setWalletAccessDialogOpen(true);
+  };
+  
+  const handleVerifyWalletAccess = async () => {
+    try {
+      setLoading(true);
+      
+      // Verify wallet access password
+      const { success, error } = await verifyWalletAccessPassword(walletAccessPassword);
+      
+      if (success) {
+        setWalletAccessGranted(true);
+        setWalletAccessDialogOpen(false);
+        setWalletAccessPassword('');
+        showSnackbar('Wallet access granted successfully', 'success');
+      } else {
+        showSnackbar(error || 'Invalid wallet access password', 'error');
+      }
+    } catch (err) {
+      console.error('Error verifying wallet access:', err);
+      showSnackbar('Failed to verify wallet access', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleCloseWalletAccessDialog = () => {
+    setWalletAccessDialogOpen(false);
+    setWalletAccessPassword('');
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -297,17 +548,28 @@ function NewLogs() {
             Add Manual Registration Log
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Create manual entries that will appear in Form Registration Logs
+            Create manual entries that will appear in Form Registration Logs and optionally in Transactions
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          startIcon={<RefreshIcon />}
-          onClick={fetchUsers}
-          disabled={loading}
-        >
-          Refresh Users
-        </Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button
+            variant="outlined"
+            startIcon={<KeyIcon />}
+            onClick={handleWalletAccessRequest}
+            disabled={loading}
+            color={walletAccessGranted ? 'success' : 'warning'}
+          >
+            {walletAccessGranted ? 'Wallet Access Granted' : 'Unlock Wallet Access'}
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshIcon />}
+            onClick={fetchUsers}
+            disabled={loading}
+          >
+            Refresh Users
+          </Button>
+        </Box>
       </Box>
 
       <Card sx={{ maxWidth: 1200, mx: 'auto' }}>
@@ -343,7 +605,10 @@ function NewLogs() {
                       <Box>
                         <Typography variant="body1">{option.displayName}</Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {option.email} | BC ID: {option.bcId || 'N/A'}
+                          {option.email} | BC ID: {option.bcId || 'N/A'} | Wallet: ₹{option.wallet || 0}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          RSA: ₹{option.minRSABalance || 400} | Non-RSA: ₹{option.minFasTagBalance || 400}
                         </Typography>
                       </Box>
                     </Box>
@@ -414,19 +679,6 @@ function NewLogs() {
                   error={!!errors.vehicleNo}
                   helperText={errors.vehicleNo || 'Enter the vehicle registration number'}
                   placeholder="e.g., KA01AB1234"
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Mobile Number *"
-                  value={formData.mobileNo}
-                  onChange={(e) => handleInputChange('mobileNo', e.target.value.replace(/\D/g, ''))}
-                  error={!!errors.mobileNo}
-                  helperText={errors.mobileNo || 'Enter 10-digit mobile number'}
-                  placeholder="e.g., 9876543210"
-                  inputProps={{ maxLength: 10 }}
                 />
               </Grid>
 
@@ -556,6 +808,156 @@ function NewLogs() {
                   />
                 </Grid>
               )}
+
+              {/* Transaction Section */}
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 3 }}>
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center' }}>
+                    <CheckCircleIcon sx={{ mr: 1, color: 'primary.main' }} />
+                    Transaction Details (Optional)
+                  </Typography>
+                  {!walletAccessGranted && (
+                    <Tooltip title="Wallet access required to create transactions">
+                      <Chip
+                        label="Wallet Access Required"
+                        color="warning"
+                        size="small"
+                        icon={<KeyIcon />}
+                      />
+                    </Tooltip>
+                  )}
+                </Box>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Create Transaction Log</InputLabel>
+                  <Select
+                    value={formData.createTransaction}
+                    onChange={(e) => handleInputChange('createTransaction', e.target.value)}
+                    label="Create Transaction Log"
+                    disabled={!walletAccessGranted}
+                  >
+                    <MenuItem value={false}>No Transaction</MenuItem>
+                    <MenuItem value={true} disabled={!walletAccessGranted}>
+                      Create Transaction Entry {!walletAccessGranted && '(Wallet Access Required)'}
+                    </MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              {formData.createTransaction && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Transaction Amount (₹) *"
+                      type="number"
+                      value={formData.transactionAmount}
+                      onChange={(e) => handleInputChange('transactionAmount', e.target.value)}
+                      error={!!errors.transactionAmount}
+                      helperText={
+                        errors.transactionAmount || 
+                        (selectedUser && formData.agentId && 
+                          ((formData.agentId === '70062' && formData.transactionAmount === selectedUser.minRSABalance?.toString()) ||
+                           (formData.agentId === '70043' && formData.transactionAmount === selectedUser.minFasTagBalance?.toString()))
+                          ? '✅ Auto-populated from user minimum balance' 
+                          : 'Auto-populated based on agent type and user minimum balance')
+                      }
+                      placeholder="e.g., 100"
+                      inputProps={{ min: 0, step: 0.01 }}
+                      InputProps={{
+                        startAdornment: selectedUser && formData.agentId && 
+                          ((formData.agentId === '70062' && formData.transactionAmount === selectedUser.minRSABalance?.toString()) ||
+                           (formData.agentId === '70043' && formData.transactionAmount === selectedUser.minFasTagBalance?.toString())) ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                            <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
+                              🔄
+                            </Typography>
+                          </Box>
+                        ) : null
+                      }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <FormControl fullWidth>
+                      <InputLabel>Transaction Type</InputLabel>
+                      <Select
+                        value={formData.transactionType}
+                        onChange={(e) => handleInputChange('transactionType', e.target.value)}
+                        label="Transaction Type"
+                      >
+                        <MenuItem value="debit">Debit</MenuItem>
+                        <MenuItem value="credit">Credit</MenuItem>
+                        <MenuItem value="recharge">Recharge</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Transaction Purpose"
+                      value={formData.transactionPurpose}
+                      onChange={(e) => handleInputChange('transactionPurpose', e.target.value)}
+                      placeholder="e.g., FasTag Registration"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Previous Balance (₹) *"
+                      type="number"
+                      value={formData.previousBalance}
+                      onChange={(e) => handleInputChange('previousBalance', e.target.value)}
+                      error={!!errors.previousBalance}
+                      helperText={
+                        errors.previousBalance || 
+                        (selectedUser && formData.previousBalance === selectedUser.wallet?.toString() 
+                          ? '✅ Auto-populated from user wallet' 
+                          : 'Auto-populated from user wallet, can be manually adjusted')
+                      }
+                      placeholder="e.g., 500"
+                      inputProps={{ min: 0, step: 0.01 }}
+                      InputProps={{
+                        startAdornment: selectedUser && formData.previousBalance === selectedUser.wallet?.toString() ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                            <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
+                              🔄
+                            </Typography>
+                          </Box>
+                        ) : null
+                      }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="New Balance (₹) *"
+                      type="number"
+                      value={formData.newBalance}
+                      onChange={(e) => handleInputChange('newBalance', e.target.value)}
+                      error={!!errors.newBalance}
+                      helperText={errors.newBalance || 'Auto-calculated based on transaction type, amount, and previous balance'}
+                      placeholder="e.g., 400"
+                      inputProps={{ min: 0, step: 0.01 }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', mt: 1 }}>
+                      💡 Tip: Transaction amount is auto-populated based on agent type (RSA uses minRSABalance, Non-RSA uses minFasTagBalance). 
+                      New balance is automatically calculated based on transaction type, amount, and previous balance. 
+                      The user's wallet will be updated with the new balance when the log is created.
+                      You can manually adjust any values if needed.
+                    </Typography>
+                  </Grid>
+                </>
+              )}
             </Grid>
           </form>
         </CardContent>
@@ -590,7 +992,7 @@ function NewLogs() {
             Information
           </Typography>
           <Grid container spacing={2}>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={3}>
               <Typography variant="subtitle2" color="primary" gutterBottom>
                 Purpose
               </Typography>
@@ -599,7 +1001,19 @@ function NewLogs() {
                 These logs will be visible in the Form Registration Logs page.
               </Typography>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={3}>
+              <Typography variant="subtitle2" color="primary" gutterBottom>
+                Transaction Logs
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Optionally create corresponding transaction entries in the transactions 
+                collection that will appear in the Transactions page. Previous balance 
+                is auto-populated from user's wallet, and transaction amount is auto-populated 
+                based on agent type (RSA uses minRSABalance, Non-RSA uses minFasTagBalance).
+                User's wallet is automatically updated with the new balance.
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={3}>
               <Typography variant="subtitle2" color="primary" gutterBottom>
                 Timestamp Options
               </Typography>
@@ -608,18 +1022,56 @@ function NewLogs() {
                 actually occurred. Useful for backdating registrations.
               </Typography>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={3}>
               <Typography variant="subtitle2" color="primary" gutterBottom>
                 Compatibility
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 Created logs include all necessary fields to be compatible with the 
-                existing Form Registration Logs display format.
+                existing Form Registration Logs and Transactions display formats.
               </Typography>
             </Grid>
           </Grid>
         </CardContent>
       </Card>
+
+      {/* Wallet Access Dialog */}
+      <Dialog
+        open={walletAccessDialogOpen}
+        onClose={handleCloseWalletAccessDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Wallet Access Authorization</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+            <Typography variant="body2">
+              Please enter the wallet access password to create transactions and update user wallets:
+            </Typography>
+            
+            <TextField
+              label="Wallet Access Password"
+              value={walletAccessPassword}
+              onChange={(e) => setWalletAccessPassword(e.target.value)}
+              fullWidth
+              autoFocus
+              type="password"
+              placeholder="Enter wallet access password"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseWalletAccessDialog}>Cancel</Button>
+          <Button
+            onClick={handleVerifyWalletAccess}
+            variant="contained"
+            color="primary"
+            disabled={!walletAccessPassword || loading}
+          >
+            {loading ? 'Verifying...' : 'Unlock'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={snackbar.open}
