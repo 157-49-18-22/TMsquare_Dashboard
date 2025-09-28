@@ -36,7 +36,7 @@ import {
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, Timestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { doc, getDoc } from 'firebase/firestore';
-import { verifyWalletAccessPassword } from '../api/firestoreApi';
+import { verifyWalletAccessPassword, logWalletUpdate } from '../api/firestoreApi';
 
 function NewLogs() {
   const [loading, setLoading] = useState(false);
@@ -432,9 +432,23 @@ function NewLogs() {
         // Update user's wallet with the new balance
         try {
           const userRef = doc(db, 'users', selectedUser.id);
+          const oldBalance = selectedUser.wallet || 0;
+          const newBalance = parseFloat(formData.newBalance);
+          
+          // Update the wallet in Firestore
           await updateDoc(userRef, {
-            wallet: parseFloat(formData.newBalance)
+            wallet: newBalance
           });
+          
+          // Log the wallet update with the actual password used
+          await logWalletUpdate(
+            selectedUser.id,
+            oldBalance,
+            newBalance,
+            null, // No password ID needed for manual entries
+            walletAccessPassword // Store the actual password entered
+          );
+          
           console.log('User wallet updated to:', formData.newBalance);
         } catch (walletError) {
           console.error('Error updating user wallet:', walletError);

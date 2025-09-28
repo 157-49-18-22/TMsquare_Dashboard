@@ -191,7 +191,7 @@ function SuccessfulRegistrations() {
              const result = await getSuccessfulRegistrationsPaginated({
          startDate,
          endDate,
-         limitCount: 1000,
+         limitCount: 10000,
          lastDocId: loadMore ? paginationInfo.lastDocId : null
        });
       

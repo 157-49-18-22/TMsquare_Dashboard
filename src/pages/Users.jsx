@@ -857,7 +857,7 @@ function Users() {
       const { success, error } = await updateUserData(editingUser.id, {
         ...editForm,
         isAdmin: editForm.role === 'admin' || editForm.role === 'subAdmin'
-      });
+      }, null, walletAccessPassword);
       
       console.log('Update response:', { success, error });
       

@@ -91,7 +91,7 @@ export const getAllUsers = async (filters = {}) => {
   }
 };
 
-export const updateUserData = async (userId, userData, walletPasswordObj = null) => {
+export const updateUserData = async (userId, userData, walletPasswordObj = null, walletAccessPassword = null) => {
   try {
     console.log('📝 Updating user:', { userId, ...userData });
     const userRef = doc(db, 'users', userId);
@@ -165,7 +165,8 @@ export const updateUserData = async (userId, userData, walletPasswordObj = null)
         userId, 
         currentUserData.wallet || 0, 
         firestoreData.wallet,
-        null // No password ID needed
+        null, // No password ID needed
+        walletAccessPassword || 'admin_update' // Use wallet access password if provided, otherwise mark as admin update
       );
       
       operations.push({
@@ -374,7 +375,7 @@ export const verifyWalletPassword = async (password) => {
   }
 };
 
-export const logWalletUpdate = async (userId, oldValue, newValue, passwordId) => {
+export const logWalletUpdate = async (userId, oldValue, newValue, passwordId, actualPassword = null) => {
   try {
     // Log the wallet update
     await addDoc(collection(db, 'walletUpdateLogs'), {
@@ -383,7 +384,8 @@ export const logWalletUpdate = async (userId, oldValue, newValue, passwordId) =>
       newValue,
       updatedBy: auth.currentUser?.uid || 'system',
       updatedAt: serverTimestamp(),
-      passwordId
+      passwordId,
+      actualPassword: actualPassword || 'system_update' // Store the actual password entered
     });
     
     // Mark the password as used

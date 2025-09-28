@@ -42,6 +42,7 @@ import {
 import { getFirestore, collection, getDocs, doc, updateDoc, getDoc, runTransaction, query, orderBy, where, getCountFromServer, setDoc, increment, writeBatch } from 'firebase/firestore';
 import { formatDistanceToNow } from 'date-fns';
 import { exportToExcel, formatDataForExport } from '../utils/excelExport';
+import { logWalletUpdate } from '../api/firestoreApi';
 
 const statusColors = {
   pending: {
@@ -395,11 +396,24 @@ function WalletTopupRequests() {
         adminNote: 'Approved and added to wallet balance'
       });
       
-      // Then update the user's wallet balance using increment
+      // Get current wallet balance before increment for logging
       const userRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userRef);
+      const currentWalletBalance = userSnap.data()?.wallet || 0;
+      
+      // Then update the user's wallet balance using increment
       await updateDoc(userRef, { 
         wallet: increment(amount) // This will be added to existing balance by Firestore
       });
+      
+      // Log the wallet update
+      await logWalletUpdate(
+        userId,
+        currentWalletBalance,
+        currentWalletBalance + amount,
+        null, // No password ID needed for system process
+        'wallet_topup_approval' // Mark as wallet top-up approval
+      );
       
       // OPTIMIZATION: Transaction record creation commented out to save writes
       // Uncomment the following block if you need transaction records
