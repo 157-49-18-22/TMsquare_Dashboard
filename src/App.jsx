@@ -25,6 +25,7 @@ import FormRegistrationLogsAgent70062 from './pages/FormRegistrationLogsAgent700
 import NewLogs from './pages/newlogs';
 import SuccessfulRegistrations from './pages/SuccessfulRegistrations';
 import Transactions from './pages/Transactions';
+import UserTransactions from './pages/UserTransactions';
 import Pending from './pages/pending';
 
 const theme = createTheme({
@@ -444,6 +445,18 @@ function AppRoutes() {
           <AdminOrSubAdminRoute>
             <Layout>
               <Transactions />
+            </Layout>
+          </AdminOrSubAdminRoute>
+        }
+      />
+      
+      {/* User Transactions - accessible by any admin */}
+      <Route
+        path="/user-transactions"
+        element={
+          <AdminOrSubAdminRoute>
+            <Layout>
+              <UserTransactions />
             </Layout>
           </AdminOrSubAdminRoute>
         }

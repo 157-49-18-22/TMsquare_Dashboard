@@ -22,7 +22,8 @@ import {
   AccountBalanceWallet as WalletIcon,
   VpnKey as KeyIcon,
   FormatListBulleted as LogsIcon,
-  Add as AddIcon
+  Add as AddIcon,
+  Receipt as ReceiptIcon
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -122,12 +123,12 @@ const AdminMenu = () => {
       path: '/settings',
       adminOnly: false
     },
-    // {
-    //   text: 'Wallet Topup History',
-    //   icon: <HistoryIcon />,
-    //   path: '/wallet-topup-history',
-    //   adminOnly: true
-    // },
+    {
+      text: 'Wallet Topup History',
+      icon: <HistoryIcon />,
+      path: '/successful-registrations',
+      adminOnly: true
+    },
     {
       text: 'FastTag Data',
       icon: <FastagIcon />,
@@ -138,6 +139,12 @@ const AdminMenu = () => {
       text: 'Transactions',
       icon: <HistoryIcon />,
       path: '/transactions',
+      adminOnly: false
+    },
+    {
+      text: 'User Transactions',
+      icon: <ReceiptIcon />,
+      path: '/user-transactions',
       adminOnly: false
     },
     {
