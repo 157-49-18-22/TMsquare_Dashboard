@@ -4,7 +4,7 @@ import { getFirestore } from 'firebase/firestore';
 
 // Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyBGeNqnvp7SoLLJWNAofH70C6aH3AZhuY4",
+  apiKey: "AIzaSyBez_mPjbkTD583Ykd-umcvhnkjTUQ03Tw",
   authDomain: "tmsquareapp-df8f8.firebaseapp.com",
   projectId: "tmsquareapp-df8f8",
   storageBucket: "tmsquareapp-df8f8.firebasestorage.app",
