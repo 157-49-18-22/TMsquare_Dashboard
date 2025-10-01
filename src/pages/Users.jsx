@@ -827,17 +827,28 @@ function Users() {
       console.log('Wallet balance change detected, original:', editingUser.wallet, 'new:', value);
     }
     
-    // Check if status is being changed to active and user doesn't have a BC_ID
-    if (name === 'status' && value === 'active' && (!editForm.bcId || editForm.bcId === '000na' || editForm.bcId.trim() === '')) {
-      console.log('Status changed to active without valid BC_ID, generating new BC_ID');
+    // Check if status is being changed to active
+    if (name === 'status' && value === 'active') {
+      console.log('Status changed to active, setting minRSABalance to 100000000');
       
-      const newBcId = generateUniqueBcId();
-      
-      setEditForm(prevForm => ({
-        ...prevForm,
-        [name]: value,
-        bcId: newBcId
-      }));
+      // Check if user doesn't have a BC_ID and generate one
+      if (!editForm.bcId || editForm.bcId === '000na' || editForm.bcId.trim() === '') {
+        console.log('Status changed to active without valid BC_ID, generating new BC_ID');
+        const newBcId = generateUniqueBcId();
+        
+        setEditForm(prevForm => ({
+          ...prevForm,
+          [name]: value,
+          bcId: newBcId,
+          minRSABalance: '100000000' // Set minRSABalance to 100000000 when status becomes active
+        }));
+      } else {
+        setEditForm(prevForm => ({
+          ...prevForm,
+          [name]: value,
+          minRSABalance: '100000000' // Set minRSABalance to 100000000 when status becomes active
+        }));
+      }
     } else {
       setEditForm(prevForm => ({
         ...prevForm,
@@ -1227,7 +1238,7 @@ function Users() {
               fullWidth
               helperText="Custom minimum balance required for FasTag registration (leave empty to use default 400)"
             />
-            <TextField
+            {/* <TextField
               label="Minimum RSA Balance"
               name="minRSABalance"
               type="number"
@@ -1235,7 +1246,7 @@ function Users() {
               onChange={handleEditFormChange}
               fullWidth
               helperText="Custom minimum balance required for RSA registration (leave empty to use default 400)"
-            />
+            /> */}
           </Box>
         </DialogContent>
         <DialogActions>
