@@ -36,7 +36,7 @@ import {
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, Timestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { doc, getDoc } from 'firebase/firestore';
-import { verifyWalletAccessPassword, logWalletUpdate } from '../api/firestoreApi';
+import { verifyWalletAccessPassword, logWalletUpdate, logSuccessfulRegistration } from '../api/firestoreApi';
 
 function NewLogs() {
   const [loading, setLoading] = useState(false);
@@ -398,6 +398,53 @@ function NewLogs() {
       console.log('Log data timestamp type:', typeof logTimestamp);
       console.log('Log data timestamp value:', logTimestamp);
 
+      // If this is a successful registration, also log it to successfulRegistrations collection
+      if (formData.status === 'success') {
+        try {
+          const userData = {
+            bcId: selectedUser.bcId || 'N/A',
+            displayName: selectedUser.displayName || 'Unknown',
+            minFasTagBalance: selectedUser.minFasTagBalance || '400'
+          };
+
+          const formDataForSuccessfulLog = {
+            vehicleNo: formData.vehicleNo.trim(),
+            serialNo: formData.serialNo.trim(),
+            mobileNo: 'N/A', // Manual logs don't have mobile number
+            agentId: formData.agentId,
+            apiSuccess: formData.apiSuccess,
+            error: formData.error,
+            finalRegistrationData: {
+              vrnDetails: {
+                vrn: formData.vehicleNo.trim()
+              },
+              fasTagDetails: {
+                serialNo: formData.serialNo.trim()
+              },
+              regDetails: {
+                agentId: formData.agentId
+              }
+            }
+          };
+
+          const successfulLogResult = await logSuccessfulRegistration(
+            formDataForSuccessfulLog,
+            selectedUser.id,
+            selectedUser.email,
+            userData
+          );
+
+          if (successfulLogResult.success) {
+            console.log('✅ Successfully logged to successfulRegistrations collection:', successfulLogResult.registrationId);
+          } else {
+            console.error('❌ Failed to log to successfulRegistrations collection:', successfulLogResult.error);
+          }
+        } catch (error) {
+          console.error('❌ Error logging to successfulRegistrations collection:', error);
+          // Don't fail the entire operation if this fails
+        }
+      }
+
       // Create transaction log if requested
       if (formData.createTransaction) {
         const transactionData = {
@@ -479,8 +526,10 @@ function NewLogs() {
       setErrors({});
       
       const successMessage = formData.createTransaction 
-        ? 'Manual log and transaction created successfully! User wallet updated. They will appear in Form Registration Logs and Transactions.'
-        : 'Manual log created successfully! It will appear in Form Registration Logs.';
+        ? 'Manual log and transaction created successfully! User wallet updated. They will appear in Form Registration Logs, Successful Registrations, and Transactions.'
+        : formData.status === 'success' 
+          ? 'Manual log created successfully! It will appear in Form Registration Logs and Successful Registrations.'
+          : 'Manual log created successfully! It will appear in Form Registration Logs.';
       showSnackbar(successMessage, 'success');
       
     } catch (error) {

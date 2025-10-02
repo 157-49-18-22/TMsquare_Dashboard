@@ -27,6 +27,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { exportToExcel, formatDataForExport } from '../utils/excelExport';
+import { logSuccessfulRegistration } from '../api/firestoreApi';
 
 function FormRegistrationLogsAgent70062() {
   const [logs, setLogs] = useState([]);
@@ -364,6 +365,13 @@ function FormRegistrationLogsAgent70062() {
       // Add to processing set
       setProcessingLogs(prev => new Set([...prev, logId]));
       
+      // Find the log data before updating
+      const logToUpdate = logs.find(log => log.id === logId);
+      if (!logToUpdate) {
+        showSnackbar('Log not found', 'error');
+        return;
+      }
+      
       // Update the document in Firestore
       const logRef = doc(db, 'formLogs', logId);
       await updateDoc(logRef, {
@@ -373,11 +381,56 @@ function FormRegistrationLogsAgent70062() {
         'updatedAt': new Date().toISOString()
       });
       
+      // Also log to successfulRegistrations collection
+      try {
+        const userData = {
+          bcId: logToUpdate.bcId || 'N/A',
+          displayName: logToUpdate.displayName || 'Unknown',
+          minFasTagBalance: logToUpdate.minFasTagBalance || '400'
+        };
+
+        const formDataForSuccessfulLog = {
+          vehicleNo: logToUpdate.vehicleNo,
+          serialNo: logToUpdate.serialNo,
+          mobileNo: logToUpdate.mobileNo || 'N/A',
+          agentId: logToUpdate.agentId,
+          apiSuccess: true,
+          error: null,
+          finalRegistrationData: {
+            vrnDetails: {
+              vrn: logToUpdate.vehicleNo
+            },
+            fasTagDetails: {
+              serialNo: logToUpdate.serialNo
+            },
+            regDetails: {
+              agentId: logToUpdate.agentId
+            }
+          }
+        };
+
+        const successfulLogResult = await logSuccessfulRegistration(
+          formDataForSuccessfulLog,
+          logToUpdate.userId,
+          'N/A', // Email not available in pending logs
+          userData
+        );
+
+        if (successfulLogResult.success) {
+          console.log('✅ Successfully logged to successfulRegistrations collection:', successfulLogResult.registrationId);
+        } else {
+          console.error('❌ Failed to log to successfulRegistrations collection:', successfulLogResult.error);
+        }
+      } catch (successfulLogError) {
+        console.error('❌ Error logging to successfulRegistrations collection:', successfulLogError);
+        // Don't fail the entire operation if this fails
+      }
+      
       // Remove from logs list (since it's no longer pending)
       setLogs(prev => prev.filter(log => log.id !== logId));
       setFilteredLogs(prev => prev.filter(log => log.id !== logId));
       
-      showSnackbar('Registration marked as successful!', 'success');
+      showSnackbar('Registration marked as successful! It will now appear in Successful Registrations.', 'success');
       
     } catch (error) {
       console.error('Error updating registration status:', error);
