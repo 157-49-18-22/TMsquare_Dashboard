@@ -38,7 +38,7 @@ import TableHead from '@mui/material/TableHead';
 import TableBody from '@mui/material/TableBody';
 import TableRow from '@mui/material/TableRow';
 import TableCell from '@mui/material/TableCell';
-import { collection, query, getDocs, addDoc, serverTimestamp, orderBy, limit, where, deleteDoc, writeBatch, doc } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, setDoc, getDoc, serverTimestamp, orderBy, limit, where, deleteDoc, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import * as XLSX from 'xlsx';
 
@@ -528,6 +528,8 @@ const FastagManagement = () => {
       // Allocate FasTags based on the Excel data
       let successCount = 0;
       let errorCount = 0;
+      const duplicateSerialNumbers = [];
+      const otherErrors = [];
       
       for (const row of validRows) {
         const serialNumber = row["Serial Number"].toString().trim();
@@ -535,7 +537,18 @@ const FastagManagement = () => {
         const user = usersByBcId[bcId];
         
         try {
-          await addDoc(collection(db, "allocatedFasTags"), {
+          // Check if document already exists
+          const docRef = doc(db, "allocatedFasTags", serialNumber);
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            duplicateSerialNumbers.push(serialNumber);
+            errorCount++;
+            continue;
+          }
+          
+          // Document doesn't exist, create it
+          await setDoc(doc(db, "allocatedFasTags", serialNumber), {
             serialNumber,
             bcId,
             userId: user.uid || user.id || bcId || "unknown-user",
@@ -549,16 +562,31 @@ const FastagManagement = () => {
         } catch (err) {
           console.error(`Error allocating serial number ${serialNumber} to BC ID ${bcId}:`, err);
           errorCount++;
+          otherErrors.push({ serialNumber, bcId, error: err.message });
         }
       }
       
-      // Show success/error message
+      // Show success/error message with details
       if (successCount > 0) {
-        setSuccess(`Successfully allocated ${successCount} FasTags from Excel file${errorCount > 0 ? ` (${errorCount} errors)` : ""}.`);
+        let message = `Successfully allocated ${successCount} FasTags from Excel file`;
+        if (duplicateSerialNumbers.length > 0) {
+          message += `. Duplicate serial numbers skipped: ${duplicateSerialNumbers.join(", ")}`;
+        }
+        if (otherErrors.length > 0) {
+          message += `. Other errors: ${otherErrors.length}`;
+        }
+        setSuccess(message);
         // Refresh recent allocations to show the new data
         await fetchRecentAllocations();
       } else {
-        setError("Failed to allocate any FasTags from the Excel file.");
+        let errorMessage = "Failed to allocate any FasTags from the Excel file.";
+        if (duplicateSerialNumbers.length > 0) {
+          errorMessage += ` All serial numbers already exist: ${duplicateSerialNumbers.join(", ")}`;
+        }
+        if (otherErrors.length > 0) {
+          errorMessage += ` Other errors: ${otherErrors.map(e => `${e.serialNumber} (${e.error})`).join(", ")}`;
+        }
+        setError(errorMessage);
       }
       
       setLoading(false);
@@ -733,20 +761,61 @@ const FastagManagement = () => {
       const userId = selectedUser.uid || selectedUser.id || bcId || "unknown-user";
       
       // Add each serial number to the allocatedFasTags collection in Firestore
+      let successCount = 0;
+      let errorCount = 0;
+      const duplicateSerialNumbers = [];
+      const otherErrors = [];
+      
       for (const serialNumber of serialNumbers) {
-        await addDoc(collection(db, "allocatedFasTags"), {
-          serialNumber,
-          bcId,
-          userId: userId,
-          userName: selectedUser.displayName || selectedUser.name || "Unknown",
-          status: "available", // available, used, revoked
-          allocatedAt: serverTimestamp(),
-          allocatedBy: "admin" // TODO: Get current admin ID
-        });
+        try {
+          // Check if document already exists
+          const docRef = doc(db, "allocatedFasTags", serialNumber);
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            duplicateSerialNumbers.push(serialNumber);
+            errorCount++;
+            continue;
+          }
+          
+          // Document doesn't exist, create it
+          await setDoc(doc(db, "allocatedFasTags", serialNumber), {
+            serialNumber,
+            bcId,
+            userId: userId,
+            userName: selectedUser.displayName || selectedUser.name || "Unknown",
+            status: "available", // available, used, revoked
+            allocatedAt: serverTimestamp(),
+            allocatedBy: "admin" // TODO: Get current admin ID
+          });
+          successCount++;
+        } catch (error) {
+          console.error(`Error allocating serial number ${serialNumber}:`, error);
+          errorCount++;
+          otherErrors.push({ serialNumber, error: error.message });
+        }
       }
       
-      // Show success message
-      setSuccess(`Successfully allocated ${serialNumbers.length} FasTags to ${selectedUser.displayName || selectedUser.name || "user"}.`);
+      // Show success message with details
+      if (successCount > 0) {
+        let message = `Successfully allocated ${successCount} FasTags to ${selectedUser.displayName || selectedUser.name || "user"}`;
+        if (duplicateSerialNumbers.length > 0) {
+          message += `. Duplicate serial numbers skipped: ${duplicateSerialNumbers.join(", ")}`;
+        }
+        if (otherErrors.length > 0) {
+          message += `. Other errors: ${otherErrors.length}`;
+        }
+        setSuccess(message);
+      } else {
+        let errorMessage = "No FasTags were allocated.";
+        if (duplicateSerialNumbers.length > 0) {
+          errorMessage += ` All serial numbers already exist: ${duplicateSerialNumbers.join(", ")}`;
+        }
+        if (otherErrors.length > 0) {
+          errorMessage += ` Other errors: ${otherErrors.map(e => `${e.serialNumber} (${e.error})`).join(", ")}`;
+        }
+        setError(errorMessage);
+      }
       
       // Refresh recent allocations to show the new data
       await fetchRecentAllocations();
