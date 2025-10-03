@@ -22,7 +22,7 @@ import {
   Refresh as RefreshIcon,
   Download as DownloadIcon
 } from '@mui/icons-material';
-import { collection, query, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
+import { collection, query, getDocs, orderBy, doc, getDoc, where, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -56,66 +56,110 @@ function Transactions() {
     return () => clearTimeout(timer);
   }, [filter]);
 
-  // Memoized filtered transactions
+  // Memoized filtered transactions with optimized filtering
   const filteredTransactionsMemo = useMemo(() => {
-    let filtered = [...transactions];
+    let filtered = transactions;
     
-    // Filter by search term (across multiple fields)
-    if (debouncedFilter.searchTerm) {
-      const term = debouncedFilter.searchTerm.toLowerCase();
-      filtered = filtered.filter(transaction => 
-        (transaction.details?.name && transaction.details.name.toLowerCase().includes(term)) ||
-        (transaction.details?.vehicleNo && transaction.details.vehicleNo.toLowerCase().includes(term)) ||
-        (transaction.details?.serialNo && transaction.details.serialNo.toLowerCase().includes(term)) ||
-        (transaction.transactionId && transaction.transactionId.toLowerCase().includes(term)) ||
-        (transaction.userId && transaction.userId.toLowerCase().includes(term)) ||
-        (transaction.purpose && transaction.purpose.toLowerCase().includes(term)) ||
-        (transaction.collection && transaction.collection.toLowerCase().includes(term))
-      );
+    // Early return if no filters applied
+    const hasFilters = debouncedFilter.searchTerm || 
+                      debouncedFilter.collection || 
+                      debouncedFilter.status || 
+                      debouncedFilter.type || 
+                      debouncedFilter.purpose || 
+                      debouncedFilter.paymentGateway;
+    
+    if (!hasFilters) {
+      return transactions;
     }
     
-    // Filter by collection
-    if (debouncedFilter.collection) {
-      filtered = filtered.filter(transaction => 
-        transaction.collection === debouncedFilter.collection
-      );
-    }
+    // Create a single filter function for better performance
+    const filterFunction = (transaction) => {
+      // Search term filter (most expensive, so check first)
+      if (debouncedFilter.searchTerm) {
+        const term = debouncedFilter.searchTerm.toLowerCase();
+        const searchFields = [
+          transaction.details?.name,
+          transaction.details?.email,
+          transaction.details?.mobile,
+          transaction.details?.vehicleNo,
+          transaction.details?.serialNo,
+          transaction.transactionId,
+          transaction.userId,
+          transaction.purpose,
+          transaction.collection
+        ];
+        
+        if (!searchFields.some(field => field && field.toLowerCase().includes(term))) {
+          return false;
+        }
+      }
+      
+      // Other filters (fast equality checks)
+      if (debouncedFilter.collection && transaction.collection !== debouncedFilter.collection) {
+        return false;
+      }
+      
+      if (debouncedFilter.status && transaction.status !== debouncedFilter.status) {
+        return false;
+      }
+      
+      if (debouncedFilter.type && transaction.type !== debouncedFilter.type) {
+        return false;
+      }
+      
+      if (debouncedFilter.purpose && transaction.purpose !== debouncedFilter.purpose) {
+        return false;
+      }
+      
+      if (debouncedFilter.paymentGateway && transaction.paymentGateway !== debouncedFilter.paymentGateway) {
+        return false;
+      }
+      
+      return true;
+    };
     
-    // Filter by status
-    if (debouncedFilter.status) {
-      filtered = filtered.filter(transaction => 
-        transaction.status === debouncedFilter.status
-      );
-    }
-    
-    // Filter by type
-    if (debouncedFilter.type) {
-      filtered = filtered.filter(transaction => 
-        transaction.type === debouncedFilter.type
-      );
-    }
-    
-         // Filter by purpose
-     if (debouncedFilter.purpose) {
-       filtered = filtered.filter(transaction => 
-         transaction.purpose === debouncedFilter.purpose
-       );
-     }
-     
-     // Filter by payment gateway
-     if (debouncedFilter.paymentGateway) {
-       filtered = filtered.filter(transaction => 
-         transaction.paymentGateway === debouncedFilter.paymentGateway
-       );
-     }
-     
-     return filtered;
+    return transactions.filter(filterFunction);
   }, [transactions, debouncedFilter]);
 
   // Update filtered transactions when memoized result changes
   useEffect(() => {
     setFilteredTransactions(filteredTransactionsMemo);
   }, [filteredTransactionsMemo]);
+
+  // User data cache
+  const [userCache, setUserCache] = useState({});
+  const CACHE_KEY = 'transactions_user_cache';
+  const CACHE_EXPIRY = 5 * 60 * 1000; // 5 minutes
+
+  // Load user cache from localStorage
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < CACHE_EXPIRY) {
+          setUserCache(data);
+          console.log('📦 Loaded user cache from localStorage');
+        }
+      }
+    } catch (error) {
+      console.warn('Error loading user cache:', error);
+    }
+  }, []);
+
+  // Save user cache to localStorage
+  const saveUserCache = (userData) => {
+    try {
+      const cacheData = {
+        data: userData,
+        timestamp: Date.now()
+      };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cacheData));
+      console.log('💾 Saved user cache to localStorage');
+    } catch (error) {
+      console.warn('Error saving user cache:', error);
+    }
+  };
 
   // Fetch transactions data
   const fetchTransactions = useCallback(async () => {
@@ -125,18 +169,46 @@ function Transactions() {
       
       const transactionsData = [];
       
-                    // Fetch from transactions collection
-       try {
-         setLoadingMessage('Fetching all transactions from transactions collection...');
-         console.log('🔄 Fetching all transactions from transactions collection...');
-         const transactionsRef = collection(db, "transactions");
-         const q = query(transactionsRef, orderBy("timestamp", "desc"));
-         const querySnapshot = await getDocs(q);
+      // Fetch both collections in parallel for faster loading
+      setLoadingMessage('Fetching transactions and wallet data in parallel...');
+      console.log('🔄 Fetching transactions and wallet data in parallel...');
+      
+      const [transactionsSnapshot, walletSnapshot] = await Promise.all([
+        // Fetch from transactions collection
+        (async () => {
+          try {
+            setLoadingMessage('Fetching transactions collection...');
+            console.log('🔄 Fetching transactions collection...');
+            const transactionsRef = collection(db, "transactions");
+            const q = query(transactionsRef, orderBy("timestamp", "desc"));
+            return await getDocs(q);
+          } catch (err) {
+            console.warn('Error fetching transactions collection:', err);
+            return { docs: [] };
+          }
+        })(),
+        
+        // Fetch from wallet_topups collection
+        (async () => {
+          try {
+            setLoadingMessage('Fetching wallet topups collection...');
+            console.log('🔄 Fetching wallet topups collection...');
+            const walletTopupsRef = collection(db, "wallet_topups");
+            const q2 = query(walletTopupsRef, orderBy("createdAt", "desc"));
+            return await getDocs(q2);
+          } catch (err) {
+            console.warn('Error fetching wallet_topups collection:', err);
+            return { docs: [] };
+          }
+        })()
+      ]);
+      
+      // Process transactions collection
+      try {
+        setLoadingMessage(`Processing ${transactionsSnapshot.docs.length} transactions...`);
+        console.log(`📊 Found ${transactionsSnapshot.docs.length} documents in transactions collection`);
          
-         setLoadingMessage(`Processing ${querySnapshot.size} transactions...`);
-         console.log(`📊 Found ${querySnapshot.size} documents in transactions collection`);
-         
-         querySnapshot.forEach((doc) => {
+         transactionsSnapshot.forEach((doc) => {
           try {
             const data = doc.data();
             if (data) {
@@ -147,6 +219,8 @@ function Transactions() {
                  // Ensure details object exists for transactions collection
                  details: {
                    name: data.details?.name || 'N/A',
+                   email: 'N/A', // Will be populated from users collection
+                   mobile: 'N/A', // Will be populated from users collection
                    vehicleNo: data.details?.vehicleNo || 'N/A',
                    serialNo: data.details?.serialNo || 'N/A',
                    previousBalance: data.details?.previousBalance || 0,
@@ -169,19 +243,13 @@ function Transactions() {
           }
         });
       } catch (err) {
-        console.warn('Error fetching transactions collection:', err);
+        console.warn('Error processing transactions collection:', err);
       }
       
-                    // Fetch from wallet_topups collection
-       try {
-         setLoadingMessage('Fetching all transactions from wallet_topups collection...');
-         console.log('🔄 Fetching all transactions from wallet_topups collection...');
-         const walletTopupsRef = collection(db, "wallet_topups");
-         const q2 = query(walletTopupsRef, orderBy("createdAt", "desc"));
-         const walletSnapshot = await getDocs(q2);
-         
-         setLoadingMessage(`Processing ${walletSnapshot.size} wallet topups...`);
-         console.log(`📊 Found ${walletSnapshot.size} documents in wallet_topups collection`);
+      // Process wallet_topups collection
+      try {
+        setLoadingMessage(`Processing ${walletSnapshot.docs.length} wallet topups...`);
+        console.log(`📊 Found ${walletSnapshot.docs.length} documents in wallet_topups collection`);
          
          walletSnapshot.forEach((doc) => {
            try {
@@ -207,6 +275,8 @@ function Transactions() {
                   purpose: data.description || 'Wallet Top-up',
                   details: {
                     name: displayName,
+                    email: 'N/A',
+                    mobile: 'N/A',
                     vehicleNo: 'N/A',
                     serialNo: 'N/A',
                     previousBalance: (data.previousBalance || 0) / 100,
@@ -232,7 +302,7 @@ function Transactions() {
            }
          });
       } catch (err) {
-        console.warn('Error fetching wallet_topups collection:', err);
+        console.warn('Error processing wallet_topups collection:', err);
       }
       
              // Sort all transactions by timestamp (newest first)
@@ -244,54 +314,172 @@ function Transactions() {
        });
        
                // Now fetch user names for all transactions (JOIN with users table)
-        setLoadingMessage('Fetching user names from users collection...');
-        console.log('🔄 Fetching user names from users collection...');
+        setLoadingMessage('Fetching user data from users collection...');
+        console.log('🔄 Fetching user data from users collection...');
         const uniqueUserIds = [...new Set(transactionsData.map(t => t.userId).filter(id => id && id !== 'N/A'))];
        
        if (uniqueUserIds.length > 0) {
          try {
            const usersRef = collection(db, "users");
+           const userNamesMap = { ...userCache }; // Start with cached data
            
-           // Since userId in transactions is actually the document ID of users, fetch each user individually
-           const userNamesMap = {};
+           // Find users that need to be fetched (not in cache)
+           const usersToFetch = uniqueUserIds.filter(userId => !userCache[userId]);
+           console.log(`📦 Cache hit: ${Object.keys(userCache).length} users, Need to fetch: ${usersToFetch.length} users`);
            
-                       for (let i = 0; i < uniqueUserIds.length; i++) {
-              const userId = uniqueUserIds[i];
-              try {
-                setLoadingMessage(`Fetching user ${i + 1} of ${uniqueUserIds.length}...`);
-                // Get the user document directly by ID (this is the JOIN operation)
-                const userDocRef = doc(db, "users", userId);
-                const userDoc = await getDoc(userDocRef);
-               
-               if (userDoc.exists()) {
-                 const userData = userDoc.data();
-                 if (userData) {
-                   // Use the correct field names from your users table
-                   const userName = userData.displayName || 
-                                  `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 
-                                  userData.email || 
-                                  'Unknown User';
-                   // Use the userId (document ID) as the key
-                   userNamesMap[userId] = userName;
-                   console.log(`👤 Mapped user ${userId} -> ${userName}`);
-                 }
-               } else {
-                 console.log(`⚠️ No user found for userId: ${userId}`);
-               }
-             } catch (userErr) {
-               console.warn(`Error fetching user ${userId}:`, userErr);
+           // Debug: Test fetch a single user to see the structure (only if needed)
+           if (usersToFetch.length > 0) {
+             console.log(`🔍 Testing fetch for user: ${usersToFetch[0]}`);
+             const testUserRef = doc(db, "users", usersToFetch[0]);
+             const testUserDoc = await getDoc(testUserRef);
+             if (testUserDoc.exists()) {
+               const testUserData = testUserDoc.data();
+               console.log(`✅ Test user data structure:`, {
+                 id: testUserDoc.id,
+                 displayName: testUserData.displayName,
+                 email: testUserData.email,
+                 phone: testUserData.phone,
+                 mobileNo: testUserData.mobileNo,
+                 phoneNumber: testUserData.phoneNumber,
+                 mobile: testUserData.mobile,
+                 firstName: testUserData.firstName,
+                 lastName: testUserData.lastName
+               });
+             } else {
+               console.log(`❌ Test user not found: ${usersToFetch[0]}`);
              }
            }
            
+           // Only fetch users that are not in cache
+           if (usersToFetch.length > 0) {
+             // Optimized batch processing with larger batches and parallel execution
+             const batchSize = 20; // Increased from 10 to 20
+             const userBatches = [];
+             
+             // Split users to fetch into batches of 20
+             for (let i = 0; i < usersToFetch.length; i += batchSize) {
+               userBatches.push(usersToFetch.slice(i, i + batchSize));
+             }
+           
+             console.log(`📦 Processing ${userBatches.length} batches of users (${usersToFetch.length} users to fetch)`);
+             
+             // Process batches in parallel for maximum speed
+             const batchPromises = userBatches.map(async (userBatch, batchIndex) => {
+               setLoadingMessage(`Fetching user batch ${batchIndex + 1} of ${userBatches.length} (${userBatch.length} users)...`);
+               
+               try {
+                 // Fetch all users in this batch in parallel
+                 const userPromises = userBatch.map(userId => {
+                   const userDocRef = doc(db, "users", userId);
+                   return getDoc(userDocRef);
+                 });
+                 
+                 const userDocs = await Promise.all(userPromises);
+                 const batchSnapshot = { docs: userDocs.filter(doc => doc.exists()) };
+                 
+                 console.log(`📊 Batch ${batchIndex + 1}: Found ${batchSnapshot.docs.length} users out of ${userBatch.length} requested`);
+                 
+                 const batchResults = {};
+                 batchSnapshot.forEach((userDoc) => {
+                   const userData = userDoc.data();
+                   if (userData) {
+                     const userId = userDoc.id;
+                     
+                     // Use the correct field names from your users table
+                     const userName = userData.displayName || 
+                                    `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 
+                                    userData.email || 
+                                    'Unknown User';
+                     
+                     const userEmail = userData.email || 'N/A';
+                     const userMobile = userData.phone || userData.mobileNo || userData.phoneNumber || userData.mobile || 'N/A';
+                     
+                     // Store user data object
+                     batchResults[userId] = {
+                       name: userName,
+                       email: userEmail,
+                       mobile: userMobile
+                     };
+                     console.log(`👤 Mapped user ${userId} -> ${userName} (${userEmail}, ${userMobile})`);
+                   }
+                 });
+                 
+                 // Handle users not found in this batch
+                 const foundUserIds = batchSnapshot.docs.map(doc => doc.id);
+                 const missingUserIds = userBatch.filter(id => !foundUserIds.includes(id));
+                 if (missingUserIds.length > 0) {
+                   console.log(`⚠️ Users not found in batch ${batchIndex + 1}:`, missingUserIds);
+                 }
+                 
+                 return batchResults;
+                 
+               } catch (batchErr) {
+                 console.warn(`Error fetching user batch ${batchIndex + 1}:`, batchErr);
+                 // Fallback: try individual fetches for this batch
+                 const fallbackResults = {};
+                 for (const userId of userBatch) {
+                   try {
+                     const userDocRef = doc(db, "users", userId);
+                     const userDoc = await getDoc(userDocRef);
+                     
+                     if (userDoc.exists()) {
+                       const userData = userDoc.data();
+                       if (userData) {
+                         const userName = userData.displayName || 
+                                        `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 
+                                        userData.email || 
+                                        'Unknown User';
+                         
+                         const userEmail = userData.email || 'N/A';
+                         const userMobile = userData.phone || userData.mobileNo || userData.phoneNumber || userData.mobile || 'N/A';
+                         
+                         fallbackResults[userId] = {
+                           name: userName,
+                           email: userEmail,
+                           mobile: userMobile
+                         };
+                       }
+                     }
+                   } catch (individualErr) {
+                     console.warn(`Error fetching individual user ${userId}:`, individualErr);
+                   }
+                 }
+                 return fallbackResults;
+               }
+             });
+             
+             // Wait for all batches to complete in parallel
+             const batchResults = await Promise.all(batchPromises);
+             
+             // Merge all batch results into userNamesMap
+             batchResults.forEach(batchResult => {
+               Object.assign(userNamesMap, batchResult);
+             });
+             
+             // Save updated cache
+             setUserCache(userNamesMap);
+             saveUserCache(userNamesMap);
+           } else {
+             console.log('📦 All users found in cache, skipping fetch');
+           }
+           
            console.log(`🗺️ Final userNamesMap:`, userNamesMap);
+           console.log(`📊 Total users available: ${Object.keys(userNamesMap).length}`);
+           console.log(`📊 Sample user data:`, Object.entries(userNamesMap).slice(0, 3));
            
            // Update transaction names with actual user names (MERGE the data)
+           console.log(`🔄 Starting to merge user data with ${transactionsData.length} transactions`);
+           const transactionUserIds = transactionsData.map(t => t.userId).filter(id => id && id !== 'N/A');
+           console.log(`📋 Transaction userIds to look up:`, transactionUserIds.slice(0, 5), '...');
+           
            transactionsData.forEach(transaction => {
              if (transaction.userId && transaction.userId !== 'N/A') {
                // Ensure details object exists
                if (!transaction.details) {
                  transaction.details = {
                    name: 'N/A',
+                   email: 'N/A',
+                   mobile: 'N/A',
                    vehicleNo: 'N/A',
                    serialNo: 'N/A',
                    previousBalance: 0,
@@ -299,15 +487,19 @@ function Transactions() {
                  };
                }
                
-               const userName = userNamesMap[transaction.userId];
-               console.log(`🔍 Looking up userId: ${transaction.userId}, found: ${userName || 'NOT FOUND'}`);
+               const userData = userNamesMap[transaction.userId];
+               console.log(`🔍 Looking up userId: ${transaction.userId}, found:`, userData || 'NOT FOUND');
                
-               if (userName) {
-                 transaction.details.name = userName;
-                 console.log(`✅ Updated transaction ${transaction.id} with name: ${userName}`);
+               if (userData) {
+                 transaction.details.name = userData.name;
+                 transaction.details.email = userData.email;
+                 transaction.details.mobile = userData.mobile;
+                 console.log(`✅ Updated transaction ${transaction.id} with user data:`, userData);
                } else {
                  transaction.details.name = `User_${transaction.userId.substring(0, 8)}`;
-                 console.log(`⚠️ Generated fallback name for transaction ${transaction.id}: User_${transaction.userId.substring(0, 8)}`);
+                 transaction.details.email = 'N/A';
+                 transaction.details.mobile = 'N/A';
+                 console.log(`⚠️ Generated fallback data for transaction ${transaction.id}: User_${transaction.userId.substring(0, 8)}`);
                }
              }
            });
@@ -321,6 +513,8 @@ function Transactions() {
                if (!transaction.details) {
                  transaction.details = {
                    name: 'N/A',
+                   email: 'N/A',
+                   mobile: 'N/A',
                    vehicleNo: 'N/A',
                    serialNo: 'N/A',
                    previousBalance: 0,
@@ -330,6 +524,8 @@ function Transactions() {
                
                if (transaction.details.name === 'N/A') {
                  transaction.details.name = `User_${transaction.userId.substring(0, 8)}`;
+                 transaction.details.email = 'N/A';
+                 transaction.details.mobile = 'N/A';
                }
              }
            });
@@ -345,14 +541,22 @@ function Transactions() {
             id: t.id,
             userId: t.userId,
             name: t.details?.name,
+            email: t.details?.email,
+            mobile: t.details?.mobile,
             details: t.details,
             customerName: t.details?.name // This should match the column field
           });
         });
         
-        // Add customerName field directly to each transaction for DataGrid
+        // Pre-compute all fields for DataGrid to avoid repeated calculations
         transactionsData.forEach(transaction => {
           transaction.customerName = transaction.details?.name || 'N/A';
+          transaction.customerEmail = transaction.details?.email || 'N/A';
+          transaction.customerMobile = transaction.details?.mobile || 'N/A';
+          transaction.vehicleNumber = transaction.details?.vehicleNo || 'N/A';
+          transaction.serialNumber = transaction.details?.serialNo || 'N/A';
+          transaction.previousBalance = Math.round((transaction.details?.previousBalance || 0) * 100);
+          transaction.newBalance = Math.round((transaction.details?.newBalance || 0) * 100);
         });
         
         console.log('✅ Final transaction data with customerName field:');
@@ -360,13 +564,17 @@ function Transactions() {
           console.log(`Final Transaction ${i + 1}:`, {
             id: t.id,
             customerName: t.customerName,
+            email: t.details?.email,
+            mobile: t.details?.mobile,
             details: t.details
           });
         });
         
-                 setTransactions(transactionsData);
-         setFilteredTransactions(transactionsData);
-         setLoadingMessage('');
+        // Set state AFTER user data is merged
+        console.log('🔄 Setting transactions state with merged user data...');
+        setTransactions(transactionsData);
+        setFilteredTransactions(transactionsData);
+        setLoadingMessage('');
      } catch (err) {
        console.error('Error fetching transactions:', err);
        setError('Failed to fetch transactions');
@@ -413,6 +621,8 @@ function Transactions() {
         'Status',
         'Purpose',
         'Name',
+        'Email',
+        'Mobile No',
         'Vehicle No',
         'Serial No',
         'Previous Balance',
@@ -431,11 +641,13 @@ function Transactions() {
         transaction.type || '',
         transaction.status || '',
         transaction.purpose || '',
-        transaction.details?.name || '',
-        transaction.details?.vehicleNo || '',
-        transaction.details?.serialNo || '',
-        transaction.details?.previousBalance || 0,
-        transaction.details?.newBalance || 0,
+        transaction.customerName || '',
+        transaction.customerEmail || '',
+        transaction.customerMobile || '',
+        transaction.vehicleNumber || '',
+        transaction.serialNumber || '',
+        transaction.previousBalance || 0,
+        transaction.newBalance || 0,
         transaction.paymentGateway || '',
         transaction.method || '',
         transaction.currency || 'INR',
@@ -631,13 +843,59 @@ function Transactions() {
         }
       },
     { 
-      field: 'vehicleNo', 
+      field: 'customerEmail', 
+      headerName: 'Email', 
+      width: 200,
+      renderCell: (params) => {
+        const email = params?.value || 'N/A';
+        if (email === 'N/A') {
+          return (
+            <Chip
+              label="No Email"
+              color="warning"
+              size="small"
+              variant="outlined"
+            />
+          );
+        }
+        return (
+          <Tooltip title={email}>
+            <span style={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
+              {email}
+            </span>
+          </Tooltip>
+        );
+      }
+    },
+    { 
+      field: 'customerMobile', 
+      headerName: 'Mobile No', 
+      width: 130,
+      renderCell: (params) => {
+        const mobile = params?.value || 'N/A';
+        if (mobile === 'N/A') {
+          return (
+            <Chip
+              label="No Mobile"
+              color="warning"
+              size="small"
+              variant="outlined"
+            />
+          );
+        }
+        return (
+          <Tooltip title={mobile}>
+            <span style={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
+              {mobile}
+            </span>
+          </Tooltip>
+        );
+      }
+    },
+    { 
+      field: 'vehicleNumber', 
       headerName: 'Vehicle No', 
       width: 130,
-      valueGetter: (params) => {
-        if (!params || !params.row) return 'N/A';
-        return params.row.details?.vehicleNo || 'N/A';
-      },
       renderCell: (params) => (
         <span style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
           {params?.value || 'N/A'}
@@ -645,13 +903,9 @@ function Transactions() {
       )
     },
     { 
-      field: 'serialNo', 
+      field: 'serialNumber', 
       headerName: 'Serial No', 
       width: 150,
-      valueGetter: (params) => {
-        if (!params || !params.row) return 'N/A';
-        return params.row.details?.serialNo || 'N/A';
-      },
       renderCell: (params) => (
         <Tooltip title={params?.value || ''}>
           <span style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
@@ -665,10 +919,6 @@ function Transactions() {
       headerName: 'Previous Balance', 
       width: 140,
       type: 'number',
-      valueGetter: (params) => {
-        if (!params || !params.row) return 0;
-        return params.row.details?.previousBalance || 0;
-      },
       renderCell: (params) => (
         <span style={{ color: 'text.secondary' }}>
           ₹{params?.value || 0}
@@ -680,10 +930,6 @@ function Transactions() {
       headerName: 'New Balance', 
       width: 120,
       type: 'number',
-      valueGetter: (params) => {
-        if (!params || !params.row) return 0;
-        return params.row.details?.newBalance || 0;
-      },
       renderCell: (params) => (
         <Chip
           label={`₹${params?.value || 0}`}
@@ -784,7 +1030,7 @@ function Transactions() {
                  label="Search"
                  value={filter.searchTerm}
                  onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
-                 placeholder="Search by name, vehicle, serial no, transaction ID"
+                 placeholder="Search by name, email, mobile, vehicle, serial no, transaction ID"
                />
              </Grid>
              
@@ -899,7 +1145,7 @@ function Transactions() {
          <DataGrid
            rows={filteredTransactions}
            columns={getColumns()}
-           pageSize={10}
+           pageSize={25}
            rowsPerPageOptions={[10, 25, 50, 100]}
            loading={loading}
            error={error}
@@ -911,6 +1157,11 @@ function Transactions() {
            disableDensitySelector
            disableExtendRowFullWidth
            disableColumnResize
+           // Performance optimizations
+           disableVirtualization={false}
+           rowHeight={52}
+           columnBuffer={5}
+           rowBuffer={5}
            sx={{
              '& .MuiDataGrid-cell:focus': {
                outline: 'none'
